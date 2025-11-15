@@ -9,6 +9,7 @@ const games = new Map();
 
 let nextPlayerIndex = 1;
 let nextRoomId = 1;
+let currentMove = 1;
 
 const wsServer = new WebSocketServer({ server: httpServer });
 
@@ -160,12 +161,12 @@ function handleMessage(ws, message, id) {
                 handleCreateGame(ws);
                 break;
 
-            case 'add_user_to_game':
-                handleAddUserToGame(ws, parsedMessage.data);
+            case 'add_user_to_room':
+                handleAddUserToGame(ws, messageData);
                 break;
 
-            case 'start_game':
-                console.log('[STUB] Received ship placement (start_game)');
+            case 'add_ships':
+                handleAddShips(ws, messageData);
                 break;
 
             case 'attack':
@@ -229,6 +230,93 @@ function handleCreateRoom(ws) {
     broadcastGameList();
 }
 
+function handleAddShips(ws, data) {
+    const { gameId, ships, indexPlayer: userId } = data;
+    const room = games.get(gameId);
+
+    if (!room || room.status !== 'placement' || !room.players.includes(userId)) {
+        console.warn(`[AddShips] Invalid state or user ${userId} not in room ${gameId}.`);
+        return;
+    }
+
+    const processedShips = ships.map(ship => {
+        const allPositions = [];
+        const { x: startX, y: startY } = ship.position;
+        const directionIsVertical = ship.direction;
+
+        for (let i = 0; i < ship.length; i++) {
+            let currentX = startX;
+            let currentY = startY;
+
+            if (directionIsVertical) {
+                currentY += i;
+            } else {
+                currentX += i;
+            }
+
+            allPositions.push({ x: currentX, y: currentY, hit: false });
+        }
+
+        return {
+            ...ship,
+            position: allPositions,
+            hits: 0
+        };
+    });
+
+    room.playerShips[userId] = processedShips;
+
+    const [p1Id, p2Id] = room.players;
+    if (room.playerShips[p1Id] && room.playerShips[p2Id]) {
+        room.status = 'playing';
+
+        const firstPlayerId = Math.random() < 0.5 ? p1Id : p2Id;
+        room.currentPlayer = firstPlayerId;
+
+        console.log(`Game ${room.id} started! First turn: ${firstPlayerId}`);
+        sendStartGame(room);
+        sendTurn(room);
+    }
+}
+
+function sendStartGame(room) {
+    const [p1Id, p2Id] = room.players;
+
+    room.playerWs[p1Id].send(JSON.stringify({
+        type: 'start_game',
+        data: JSON.stringify({
+            currentPlayerIndex: p1Id,
+            ships: room.playerShips[p2Id].map(ship => ({
+                length: ship.length,
+                type: ship.type,
+                direction: ship.direction,
+                position: {
+                    x: ship.position.x,
+                    y: ship.position.y
+                }
+            }))
+        }),
+        id: 0
+    }));
+
+    room.playerWs[p2Id].send(JSON.stringify({
+        type: 'start_game',
+        data: JSON.stringify({
+            currentPlayerIndex: p2Id,
+            ships: room.playerShips[p1Id].map(ship => ({
+                length: ship.length,
+                type: ship.type,
+                direction: ship.direction,
+                position: {
+                    x: ship.position.x,
+                    y: ship.position.y
+                }
+            }))
+        }),
+        id: 0
+    }));
+}
+
 function handleAddUserToGame(ws, data) {
     const userId2 = ws.userId;
     const roomId = data.indexRoom;
@@ -244,10 +332,10 @@ function handleAddUserToGame(ws, data) {
     room.status = 'placement';
 
     broadcastGameList();
-    handleStartGameSetup(room);
+    handleCreateGameSetup(room);
 }
 
-function handleStartGameSetup(room) {
+function handleCreateGameSetup(room) {
     const [p1Id, p2Id] = room.players;
 
     const ws1 = Array.from(clients.values()).find(c => c.userId === p1Id);
@@ -263,42 +351,42 @@ function handleStartGameSetup(room) {
     room.playerShips = { [p1Id]: null, [p2Id]: null };
 
     ws1.send(JSON.stringify({
-        type: 'start_game',
-        data: { ships: [], playerIndex: p1Id, enemyIndex: p2Id }
+        type: 'create_game',
+        data: JSON.stringify({
+            idGame: room.id,
+            idPlayer: p1Id
+        }),
+        id: 0
     }));
 
     ws2.send(JSON.stringify({
-        type: 'start_game',
-        data: { ships: [], playerIndex: p2Id, enemyIndex: p1Id }
+        type: 'create_game',
+        data: JSON.stringify({
+            idGame: room.id,
+            idPlayer: p2Id
+        }),
+        id: 0
     }));
 }
 
-function handleShipPlacement(ws, data) {
-    const userId = ws.userId;
-    const { gameId, ships } = data;
-
-    const room = games.get(gameId) || Array.from(games.values()).find(r => r.players.includes(userId));
-
-    if (!room || room.status !== 'placement') return;
-
-    room.playerShips[userId] = ships;
-
+function sendTurn(room) {
+    const turnMessage = JSON.stringify({
+        type: 'turn',
+        data: JSON.stringify({
+            currentPlayer: currentMove
+        }),
+        id: 0
+    });
     const [p1Id, p2Id] = room.players;
-    if (room.playerShips[p1Id] && room.playerShips[p2Id]) {
-        room.status = 'playing';
 
-        const firstPlayerId = Math.random() < 0.5 ? p1Id : p2Id;
-        room.currentPlayer = firstPlayerId;
+    const ws1 = Array.from(clients.values()).find(c => c.userId === p1Id);
+    const ws2 = Array.from(clients.values()).find(c => c.userId === p2Id);
 
-        console.log(`Game ${room.id} started! First turn: ${firstPlayerId}`);
-
-        const turnMessage = JSON.stringify({
-            type: 'turn',
-            data: { player: firstPlayerId },
-            id: 0
-        });
-
-        room.playerWs[p1Id].send(turnMessage);
-        room.playerWs[p2Id].send(turnMessage);
+    ws1.send(turnMessage);
+    ws2.send(turnMessage);
+    if (currentMove === 1) {
+        currentMove = 2
+    } else {
+        currentMove = 1
     }
 }
