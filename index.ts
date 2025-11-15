@@ -1,11 +1,15 @@
-import { httpServer } from "./src/http_server/index.js";
+import { httpServer } from "./src/server";
 import { WebSocketServer } from 'ws';
+import { broadcastWinnersList } from "./src/utils/broadcastWinnersList";
+import { broadcastGameList } from "./src/utils/broadcastGameList";
+import { handleCreateRoom } from "./src/handlers/handleCreateRoom";
+import { handleAddUserToGame } from "./src/handlers/handleAddUserToGame";
 
 const HTTP_PORT = 3000;
 
-const clients = new Map();
-const users = new Map();
-const games = new Map();
+export const clients = new Map();
+export const users = new Map();
+export const games = new Map();
 
 let nextPlayerIndex = 1;
 let nextRoomId = 1;
@@ -13,14 +17,14 @@ let currentMove = 1;
 
 const wsServer = new WebSocketServer({ server: httpServer });
 
-wsServer.on('connection', (ws) => {
+wsServer.on('connection', (ws:  any) => {
     const id = Date.now();
     clients.set(id, ws);
     ws.connectionId = id;
 
     console.log(`New client connected with ID: ${id}`);
 
-    ws.on('message', (message) => {
+    ws.on('message', (message: any) => {
         handleMessage(ws, message.toString(), id);
     });
 
@@ -39,59 +43,9 @@ wsServer.on('connection', (ws) => {
 console.log(`Start static http server on the ${HTTP_PORT} port!`);
 httpServer.listen(HTTP_PORT);
 
-function broadcast(message) {
-    const data = JSON.stringify(message);
-    for (const client of clients.values()) {
-        if (client.readyState === client.OPEN) {
-            client.send(data);
-        }
-    }
-}
-
-function broadcastGameList() {
-    console.log('waiting', Array.from(games.values()))
-    const availableRooms = Array.from(games.values())
-        .filter(room => room.status === 'waiting')
-        .map(room => {
-            const player1 = users.get(room.players[0]);
-            return {
-                roomId: room.id,
-                roomUsers: [
-                    {
-                        name: player1 ? player1.name : `Игрок ${room.players[0]}`,
-                        index: player1.index,
-                    }
-                ]
-            };
-        });
-
-    broadcast({
-        type: 'update_room',
-        data: JSON.stringify(availableRooms),
-        id: 0
-    });
-}
-
-function broadcastWinnersList() {
-    const winners = Array.from(users.values())
-        .filter(user => user.wins > 0)
-        .sort((a, b) => b.wins - a.wins);
-
-    const winnersPayload = winners.map(user => ({
-        name: user.name,
-        wins: user.wins
-    }));
-
-    broadcast({
-        type: 'update_winners',
-        data: JSON.stringify(winnersPayload),
-        id: 0
-    });
-}
-
-function handleRegistration(ws, data) {
+function handleRegistration(ws: any, data: any) {
     const { name, password } = data;
-    let responsePayload = { name: name, error: true, errorText: '' };
+    let responsePayload = { name: name, error: true, errorText: '', index: 0 };
     let userId = 0;
 
     let existingUser = Array.from(users.values()).find(user => user.name === name);
@@ -134,11 +88,11 @@ function handleRegistration(ws, data) {
     }
 }
 
-function handleAttack(ws, data) {
+function handleAttack(ws: any, data: any) {
     console.log(`[STUB] Attack requested by ${ws.userId} at (${data.x}, ${data.y}) in game ${data.gameId}`);
 }
 
-function handleMessage(ws, message, id) {
+function handleMessage(ws: any, message: any, id: any) {
     try {
         const parsedMessage = JSON.parse(message);
         let messageData = parsedMessage.data;
@@ -154,7 +108,7 @@ function handleMessage(ws, message, id) {
                 break;
 
             case 'create_room':
-                handleCreateRoom(ws);
+                handleCreateRoom(ws, nextRoomId);
                 break;
 
             case 'create_game':
@@ -182,7 +136,7 @@ function handleMessage(ws, message, id) {
     }
 }
 
-function handleCreateGame(ws) {
+function handleCreateGame(ws: any) {
     const userId = ws.userId;
     if (!userId) return;
 
@@ -206,31 +160,7 @@ function handleCreateGame(ws) {
     broadcastGameList();
 }
 
-function handleCreateRoom(ws) {
-    const userId = ws.userId;
-    if (!userId) return;
-
-    const existingRoom = Array.from(games.values()).find(room => room.players.includes(userId) && room.status !== 'finished');
-    if (existingRoom) {
-        console.warn(`User ${userId} already in a room.`);
-        return;
-    }
-
-    const roomId = nextRoomId++;
-    const newRoom = {
-        id: roomId,
-        players: [userId],
-        status: 'waiting',
-        playerShips: {},
-        playerWs: {}
-    };
-    games.set(roomId, newRoom);
-
-    console.log(`Room ${roomId} created by user ${userId}.`);
-    broadcastGameList();
-}
-
-function handleAddShips(ws, data) {
+function handleAddShips(ws: any, data: any) {
     const { gameId, ships, indexPlayer: userId } = data;
     const room = games.get(gameId);
 
@@ -239,7 +169,7 @@ function handleAddShips(ws, data) {
         return;
     }
 
-    const processedShips = ships.map(ship => {
+    const processedShips = ships.map((ship: any) => {
         const allPositions = [];
         const { x: startX, y: startY } = ship.position;
         const directionIsVertical = ship.direction;
@@ -275,18 +205,18 @@ function handleAddShips(ws, data) {
 
         console.log(`Game ${room.id} started! First turn: ${firstPlayerId}`);
         sendStartGame(room);
-        sendTurn(room);
+        handleSendTurn(room);
     }
 }
 
-function sendStartGame(room) {
+function sendStartGame(room: any) {
     const [p1Id, p2Id] = room.players;
 
     room.playerWs[p1Id].send(JSON.stringify({
         type: 'start_game',
         data: JSON.stringify({
             currentPlayerIndex: p1Id,
-            ships: room.playerShips[p2Id].map(ship => ({
+            ships: room.playerShips[p2Id].map((ship: any) => ({
                 length: ship.length,
                 type: ship.type,
                 direction: ship.direction,
@@ -303,7 +233,7 @@ function sendStartGame(room) {
         type: 'start_game',
         data: JSON.stringify({
             currentPlayerIndex: p2Id,
-            ships: room.playerShips[p1Id].map(ship => ({
+            ships: room.playerShips[p1Id].map((ship: any) => ({
                 length: ship.length,
                 type: ship.type,
                 direction: ship.direction,
@@ -317,59 +247,7 @@ function sendStartGame(room) {
     }));
 }
 
-function handleAddUserToGame(ws, data) {
-    const userId2 = ws.userId;
-    const roomId = data.indexRoom;
-
-    const room = games.get(roomId);
-
-    if (!room || room.status !== 'waiting' || room.players.length !== 1 || room.players.includes(userId2)) {
-        console.warn(`Attempt by ${userId2} to join invalid room ${roomId}`);
-        return;
-    }
-
-    room.players.push(userId2);
-    room.status = 'placement';
-
-    broadcastGameList();
-    handleCreateGameSetup(room);
-}
-
-function handleCreateGameSetup(room) {
-    const [p1Id, p2Id] = room.players;
-
-    const ws1 = Array.from(clients.values()).find(c => c.userId === p1Id);
-    const ws2 = Array.from(clients.values()).find(c => c.userId === p2Id);
-
-    if (!ws1 || !ws2) {
-        games.delete(room.id);
-        broadcastGameList();
-        return;
-    }
-
-    room.playerWs = { [p1Id]: ws1, [p2Id]: ws2 };
-    room.playerShips = { [p1Id]: null, [p2Id]: null };
-
-    ws1.send(JSON.stringify({
-        type: 'create_game',
-        data: JSON.stringify({
-            idGame: room.id,
-            idPlayer: p1Id
-        }),
-        id: 0
-    }));
-
-    ws2.send(JSON.stringify({
-        type: 'create_game',
-        data: JSON.stringify({
-            idGame: room.id,
-            idPlayer: p2Id
-        }),
-        id: 0
-    }));
-}
-
-function sendTurn(room) {
+function handleSendTurn(room: any) {
     const turnMessage = JSON.stringify({
         type: 'turn',
         data: JSON.stringify({
