@@ -1,32 +1,20 @@
 {
-  "name": "nodejs-battleship",
-  "version": "1.0.0",
-  "description": "",
-  "main": "src/index.ts",
-  "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "nodemon src/index.ts"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/notawhalea/nodejs-battleship.git"
-  },
-  "keywords": [],
-  "author": "Mikita Pelikh",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/notawhalea/nodejs-battleship/issues"
-  },
-  "homepage": "https://github.com/notawhalea/nodejs-battleship#readme",
-  "dependencies": {
-    "ws": "^8.18.3"
-  },
-  "devDependencies": {
-    "@types/node": "^24.10.1",
-    "@types/ws": "^8.18.1",
-    "nodemon": "^3.1.11",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
-  }
+    "name": "ws_task",
+    "version": "1.0.0",
+    "description": "Template for the WebSocket remote control task",
+    "main": "index.js",
+    "type": "module",
+    "scripts": {
+        "start": "node ./index.js",
+        "start:dev": "nodemon ./index.js"
+    },
+    "author": "Mikita Pelikh",
+    "keywords": [],
+    "license": "ISC",
+    "devDependencies": {
+        "nodemon": "^2.0.16"
+    },
+    "dependencies": {
+        "ws": "^8.8.0"
+    }
 }
