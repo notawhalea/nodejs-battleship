@@ -122,6 +122,10 @@ function handleMessage(ws: any, message: any, id: any) {
                 handleAttack(ws, messageData)
                 break;
 
+            case 'randomAttack':
+                handleRandomAttack(ws, messageData);
+                break;
+
             default:
                 console.log(`Unknown or unimplemented message type: ${parsedMessage.type}`);
         }
@@ -267,7 +271,7 @@ function handleAttack(ws: any, data: any): void {
     }
 
     if (result === 'killed' && checkWinCondition(defenderShips)) {
-        console.log('finished')
+        handleFinish(room, attackerId)
     }
 
     if (result === 'miss') {
@@ -281,6 +285,40 @@ function handleAttack(ws: any, data: any): void {
 
 function checkWinCondition(ships: any): boolean {
     return ships.every((ship: any) => ship.hits === ship.position.length);
+}
+
+function handleFinish(room: any, winnerId: number): void {
+    const loserId = room.players.find((id: any) => id !== winnerId)!;
+
+    room.status = 'finished';
+
+    const winner = users.get(winnerId);
+    const loser = users.get(loserId);
+
+    if (winner) {
+        winner.wins += 1;
+        winner.games += 1;
+    }
+    if (loser) {
+        loser.games += 1;
+    }
+
+    const finishResponseData = {
+        winPlayer: winnerId,
+    };
+
+    const finishMessage = JSON.stringify({
+        type: 'finish',
+        data: JSON.stringify(finishResponseData),
+        id: 0
+    });
+
+    room.playerWs[winnerId].send(finishMessage);
+    room.playerWs[loserId].send(finishMessage);
+
+    broadcastWinnersList();
+
+    games.delete(room.id);
 }
 
 function getCellsAroundShip(shipPositions: { x: number; y: number }[]): { x: number; y: number }[] {
@@ -305,6 +343,53 @@ function getCellsAroundShip(shipPositions: { x: number; y: number }[]): { x: num
         const [x, y] = s.split(',').map(Number);
         return { x, y };
     });
+}
+
+function handleRandomAttack(ws: any, data: any): void {
+    const attackerId = data.indexPlayer;
+    const room = games.get(data.gameId);
+
+    if (!room || room.status !== 'playing' || room.currentPlayer !== attackerId) {
+        return;
+    }
+
+    const defenderId = room.players.find((id: any) => id !== attackerId)!;
+    const defenderShips = room.playerShips[defenderId];
+
+    const attackedCoordinates: Set<string> = new Set();
+
+    defenderShips.forEach((ship: any) => {
+        ship.position.filter((pos: any) => pos.hit).forEach((pos: any) => {
+            attackedCoordinates.add(`${pos.x},${pos.y}`);
+        });
+    });
+
+    const untargetedCoordinates: { x: number, y: number }[] = [];
+    for (let x = 0; x < 10; x++) {
+        for (let y = 0; y < 10; y++) {
+            const coordKey = `${x},${y}`;
+            if (!attackedCoordinates.has(coordKey)) {
+                untargetedCoordinates.push({ x, y });
+            }
+        }
+    }
+
+    if (untargetedCoordinates.length === 0) {
+        console.warn(`[RandomAttack] No untargeted cells found for ${attackerId}.`);
+        return;
+    }
+
+    const randomIndex = Math.floor(Math.random() * untargetedCoordinates.length);
+    const randomTarget = untargetedCoordinates[randomIndex];
+
+    const attackData = {
+        gameId: data.gameId,
+        x: randomTarget.x,
+        y: randomTarget.y,
+        indexPlayer: attackerId
+    };
+
+    handleAttack(ws, attackData);
 }
 
 function sendStartGame(room: any) {
