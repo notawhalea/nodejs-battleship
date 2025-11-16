@@ -13,8 +13,22 @@ export const games = new Map();
 
 let nextPlayerIndex = 1;
 let nextRoomId = 1;
+const BOT_ID = 9999;
 
 const wsServer = new WebSocketServer({ server: httpServer });
+
+function createBot(): void {
+    if (!users.has(BOT_ID)) {
+        const botUser = {
+            index: BOT_ID,
+            name: "Bot",
+            wins: 0,
+            games: 0
+        };
+        users.set(BOT_ID, botUser);
+        console.log(`[Init] Bot user created with ID: ${BOT_ID}`);
+    }
+}
 
 wsServer.on('connection', (ws:  any) => {
     const id = Date.now();
@@ -126,6 +140,11 @@ function handleMessage(ws: any, message: any, id: any) {
                 handleRandomAttack(ws, messageData);
                 break;
 
+            case 'single_play':
+                createBot();
+                handleSinglePlay(ws);
+                break;
+
             default:
                 console.log(`Unknown or unimplemented message type: ${parsedMessage.type}`);
         }
@@ -133,6 +152,143 @@ function handleMessage(ws: any, message: any, id: any) {
     } catch (e) {
         console.error("Error parsing message or during handling:", e);
     }
+}
+
+function handleSinglePlay(ws: any): void {
+    const playerId = ws.userId;
+
+    if (!playerId) {
+        console.warn("[SinglePlay] User not registered.");
+        return;
+    }
+
+    const newRoomId = nextRoomId++;
+
+    const botUser = users.get(BOT_ID);
+    if (!botUser) {
+        console.error("[SinglePlay] Bot user not found!");
+        return;
+    }
+
+    const newRoom = {
+        id: newRoomId,
+        players: [playerId, BOT_ID],
+        status: 'placement',
+        currentPlayer: playerId,
+        playerShips: {
+            [playerId]: null,
+            [BOT_ID]: null,
+        },
+        playerWs: {
+            [playerId]: ws,
+            [BOT_ID]: { connectionId: BOT_ID }
+        }
+    };
+
+    games.set(newRoomId, newRoom);
+
+    console.log(`[SinglePlay] New game created: Room ${newRoomId} (Player ${playerId} vs Bot)`);
+    ws.send(JSON.stringify({
+        type: 'create_game',
+        data: JSON.stringify({
+            idGame: newRoomId,
+            idPlayer: playerId,
+        }),
+        id: 0
+    }));
+
+    botPlaceShips(newRoom, BOT_ID);
+}
+
+function botPlaceShips(room: any, botId: number): void {
+    const boardSize = 10;
+    const shipsLayout = [];
+    const occupiedCells: Set<string> = new Set();
+
+    const shipsToPlace = [4, 3, 3, 2, 2, 2, 1, 1, 1, 1];
+
+    for (const length of shipsToPlace) {
+        let placed = false;
+        let attempts = 0;
+
+        while (!placed && attempts < 1000) {
+            attempts++;
+
+            const isHorizontal = Math.random() > 0.5;
+            const startX = Math.floor(Math.random() * (isHorizontal ? boardSize - length + 1 : boardSize));
+            const startY = Math.floor(Math.random() * (isHorizontal ? boardSize : boardSize - length + 1));
+
+            let positions: { x: number, y: number }[] = [];
+            let canPlace = true;
+
+            for (let i = 0; i < length; i++) {
+                const x = isHorizontal ? startX + i : startX;
+                const y = isHorizontal ? startY : startY + i;
+
+                if (x < 0 || x >= boardSize || y < 0 || y >= boardSize) {
+                    canPlace = false;
+                    break;
+                }
+
+                for (let dx = -1; dx <= 1; dx++) {
+                    for (let dy = -1; dy <= 1; dy++) {
+                        const checkX = x + dx;
+                        const checkY = y + dy;
+                        if (occupiedCells.has(`${checkX},${checkY}`)) {
+                            canPlace = false;
+                            break;
+                        }
+                    }
+                    if (!canPlace) break;
+                }
+
+                if (!canPlace) break;
+                positions.push({ x, y });
+            }
+
+            if (canPlace) {
+                placed = true;
+
+                const shipType = length === 4 ? "huge" : length === 3 ? "large" : length === 2 ? "medium" : "small";
+
+                const newShip = {
+                    position: positions.map(p => ({ ...p, hit: false })),
+                    direction: isHorizontal,
+                    length: length,
+                    type: shipType,
+                    hits: 0
+                };
+                shipsLayout.push(newShip);
+
+                positions.forEach(p => {
+                    for (let dx = -1; dx <= 1; dx++) {
+                        for (let dy = -1; dy <= 1; dy++) {
+                            occupiedCells.add(`${p.x + dx},${p.y + dy}`);
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    if (shipsLayout.length !== shipsToPlace.length) {
+        console.error(`[Bot] Failed to place all ships for bot in room ${room.id}.`);
+        return;
+    }
+
+    room.playerShips[botId] = shipsLayout;
+    console.log(`[Bot] Ships placed for Bot in Room ${room.id}.`);
+}
+
+function botAttack(room: any, botId: number): void {
+    const playerWs = room.playerWs[room.players.find((id: any) => id !== botId)!];
+
+    const randomAttackData = {
+        gameId: room.id,
+        indexPlayer: botId
+    };
+
+    handleRandomAttack(playerWs, randomAttackData);
 }
 
 function handleCreateGame(ws: any) {
@@ -196,7 +352,7 @@ function handleAddShips(ws: any, data: any) {
     room.playerShips[userId] = processedShips;
 
     const [p1Id, p2Id] = room.players;
-    if (room.playerShips[p1Id] && room.playerShips[p2Id]) {
+    if (room.playerShips[p1Id] && (room.playerShips[p2Id] || p2Id === 9999)) {
         room.status = 'playing';
 
         const firstPlayerId = Math.random() < 0.5 ? p1Id : p2Id;
@@ -205,6 +361,9 @@ function handleAddShips(ws: any, data: any) {
         console.log(`Game ${room.id} started! First turn: ${firstPlayerId}`);
         sendStartGame(room);
         handleSendTurn(room, firstPlayerId);
+        if (firstPlayerId === BOT_ID) {
+            botAttack(room, BOT_ID);
+        }
     }
 }
 
@@ -395,39 +554,43 @@ function handleRandomAttack(ws: any, data: any): void {
 function sendStartGame(room: any) {
     const [p1Id, p2Id] = room.players;
 
-    room.playerWs[p1Id].send(JSON.stringify({
-        type: 'start_game',
-        data: JSON.stringify({
-            currentPlayerIndex: p1Id,
-            ships: room.playerShips[p2Id].map((ship: any) => ({
-                length: ship.length,
-                type: ship.type,
-                direction: ship.direction,
-                position: {
-                    x: ship.position.x,
-                    y: ship.position.y
-                }
-            }))
-        }),
-        id: 0
-    }));
+    const formatShips = (ships: any) => {
+        if (!ships) {
+            return [];
+        }
 
-    room.playerWs[p2Id].send(JSON.stringify({
-        type: 'start_game',
-        data: JSON.stringify({
-            currentPlayerIndex: p2Id,
-            ships: room.playerShips[p1Id].map((ship: any) => ({
-                length: ship.length,
-                type: ship.type,
-                direction: ship.direction,
-                position: {
-                    x: ship.position.x,
-                    y: ship.position.y
-                }
-            }))
-        }),
-        id: 0
-    }));
+        return ships.map((ship: any) => ({
+            length: ship.length,
+            type: ship.type,
+            direction: ship.direction,
+            position: {
+                x: ship.position[0].x,
+                y: ship.position[0].y
+            }
+        }));
+    };
+
+    if (room.playerWs[p1Id]) {
+        room.playerWs[p1Id].send(JSON.stringify({
+            type: 'start_game',
+            data: JSON.stringify({
+                ships: formatShips(room.playerShips[p2Id]),
+                currentPlayerIndex: room.currentPlayer
+            }),
+            id: 0
+        }));
+    }
+
+    if (p2Id !== BOT_ID && room.playerWs[p2Id]) {
+        room.playerWs[p2Id].send(JSON.stringify({
+            type: 'start_game',
+            data: JSON.stringify({
+                ships: formatShips(room.playerShips[p1Id]),
+                currentPlayerIndex: room.currentPlayer
+            }),
+            id: 0
+        }));
+    }
 }
 
 function handleSendTurn(room: any, nextMove: any) {
